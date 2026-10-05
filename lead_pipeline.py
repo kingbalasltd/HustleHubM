@@ -221,6 +221,15 @@ def run_pipeline(
         f"Skipped: {summary['skipped']} | Already known: {summary['existing']}"
     )
 
+    if summary["saved"] == 0:
+        log(
+            "\nNo new leads this time - the businesses found already have "
+            "decent websites (or were checked before). Try a suburb instead "
+            "of the city (e.g. 'Sandton', 'Umhlanga'), another type of "
+            "business, or add a Google Places key to find businesses with "
+            "no website at all."
+        )
+
     return summary
 
 

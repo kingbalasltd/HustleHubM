@@ -20,6 +20,7 @@ DIRECTORY_DOMAINS = {
     "sayellow.com",
     "infoisinfo.co.za",
     "sa-venues.com",
+    "africalistings.com",
     "localbusinessdirectory.co.za",
     "gumtree.co.za",
     "yelp.com",
