@@ -24,7 +24,9 @@ def find_leads(niche, location, max_results=10):
             "places.id,"
             "places.displayName,"
             "places.formattedAddress,"
-            "places.websiteUri"
+            "places.websiteUri,"
+            "places.internationalPhoneNumber,"
+            "places.businessStatus"
         )
     }
 
@@ -47,6 +49,10 @@ def find_leads(niche, location, max_results=10):
     leads = []
 
     for place in results:
+
+        if place.get("businessStatus") == "CLOSED_PERMANENTLY":
+            continue
+
         leads.append({
             "business_name": place.get(
                 "displayName", {}
@@ -60,7 +66,16 @@ def find_leads(niche, location, max_results=10):
                 "websiteUri", ""
             ),
 
-            "place_id": place.get("id", "")
+            "phone": place.get(
+                "internationalPhoneNumber", ""
+            ),
+
+            "place_id": place.get("id", ""),
+
+            # Google already confirmed it's a real business.
+            "source": "google places",
+            "verified": True,
+            "search_evidence": "Listed on Google Maps",
         })
 
     return leads
