@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+
+{% block title %}{{ lead["business_name"] }} - HustleHubM{% endblock %}
+
+{% block content %}
+
+{% set signals = lead | signals %}
+{% set site = signals.get("site", {}) %}
+{% set opportunities = signals.get("opportunities", []) %}
+
+<a class="back" href="{{ url_for('index') }}">&larr; All leads</a>
+
+<header class="lead-head">
+
+    <div>
+        <h1>{{ lead["business_name"] }}</h1>
+
+        <p class="muted">
+            {% if lead["website"] %}
+                <a href="{{ lead['website'] }}" target="_blank" rel="noopener">{{ lead["website"] | domain }}</a>
+            {% else %}
+                No website
+            {% endif %}
+            {% if lead["location"] %} &middot; {{ lead["location"] }}{% endif %}
+            {% if lead["industry"] %} &middot; {{ lead["industry"] }}{% endif %}
+        </p>
+    </div>
+
+    <div class="lead-badges">
+        <span class="score big score-{{ (lead['qualification'] or 'LOW') | lower }}">
+            {{ lead["lead_score"] }}<small>/100</small>
+        </span>
+        <span class="status status-{{ (lead['status'] or 'New') | lower | replace(' ', '-') }}">
+            {{ lead["status"] or "New" }}
+        </span>
+    </div>
+
+</header>
+
+
+<div class="lead-grid">
+
+    <section class="card">
+
+        <h2>First email</h2>
+
+        <form method="POST" action="{{ url_for('save_lead', lead_id=lead['id']) }}" id="email-form">
+
+            <label>
+                To
+                <input name="email" id="to" type="email" value="{{ lead['email'] or '' }}" placeholder="No email found - add one if you have it">
+            </label>
+
+            {% if lead["email_status"] == "no_mx" %}
+                <p class="field-note bad">
+                    This email's domain can't receive mail - it would bounce.
+                    Check the address on their website.
+                </p>
+            {% elif lead["email_status"] == "valid" %}
+                <p class="field-note good">Email domain checked - it can receive mail.</p>
+            {% endif %}
+
+            <label>
+                Subject
+                <input name="email_subject" id="subject" value="{{ lead['email_subject'] or '' }}">
+            </label>
+
+            <label>
+                Message
+                <textarea name="email_body" id="body" rows="16">{{ lead["email_body"] or "" }}</textarea>
+            </label>
+
+            <div class="send-row">
+                <a class="btn" id="send-gmail" href="#" target="_blank" rel="noopener">Open in Gmail</a>
+                <a class="btn" id="send-mailto" href="#">Open in email app</a>
+                <button type="button" class="btn" id="copy">Copy</button>
+                {% if whatsapp %}
+                    <a class="btn whatsapp" id="send-wa" href="#" target="_blank" rel="noopener"
+                       data-number="{{ whatsapp }}">
+                        {{ 'WhatsApp' if lead['whatsapp'] else 'Try WhatsApp' }}
+                    </a>
+                {% endif %}
+            </div>
+
+            <p class="muted small">
+                Read it first and change anything you like - these buttons
+                use what's in the boxes right now. After you send it, press
+                <strong>Save &amp; mark as contacted</strong>.
+            </p>
+
+            <div class="grid-2">
+                <label>
+                    Phone
+                    <input name="phone" value="{{ lead['phone'] or '' }}">
+                </label>
+
+                <label>
+                    Notes
+                    <input name="notes" value="{{ lead['notes'] or '' }}" placeholder="Spoke to reception, call back Friday...">
+                </label>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" name="action" value="save" class="btn">Save</button>
+                <button type="submit" name="action" value="contacted" class="btn primary">Save &amp; mark as contacted</button>
+            </div>
+
+        </form>
+
+        <form method="POST" action="{{ url_for('rewrite_email', lead_id=lead['id']) }}" class="inline-form">
+            <button type="submit" class="btn ghost" {{ 'disabled' if not ai_ready }}>
+                Rewrite with AI
+            </button>
+            <span class="muted small">Replaces the subject and message above.</span>
+        </form>
+
+    </section>
+
+
+    <aside>
+
+        <section class="card">
+
+            <h2>What you can help with</h2>
+
+            {% if opportunities %}
+                <ul class="opps-list">
+                    {% for item in opportunities %}
+                        <li>
+                            <span>{{ item.label }}</span>
+                            <span class="points">+{{ item.points }}</span>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p class="muted">Nothing obvious found on the website.</p>
+            {% endif %}
+
+            {% if lead["ai_reason"] %}
+                <p class="muted small">AI: {{ lead["ai_reason"] }}</p>
+            {% endif %}
+
+        </section>
+
+
+        <section class="card">
+
+            <h2>Website check</h2>
+
+            {% if site.get("status") == "ok" %}
+                {% set checks = [
+                    ("Works on phones (viewport tag)", site.get("mobile_friendly")),
+                    ("Secure (https)", site.get("https")),
+                    ("Online booking", site.get("has_booking")),
+                    ("Contact form", site.get("has_contact_form")),
+                    ("WhatsApp button", site.get("has_whatsapp")),
+                    ("Social media links", site.get("has_social_links")),
+                    ("Google description", site.get("description")),
+                    ("Email on the website", site.get("has_email")),
+                ] %}
+
+                <ul class="checks">
+                    {% for label, ok in checks %}
+                        <li class="{{ 'yes' if ok else 'no' }}">
+                            <span class="mark">{{ '&#10003;' | safe if ok else '&#10007;' | safe }}</span>
+                            {{ label }}
+                        </li>
+                    {% endfor %}
+                </ul>
+
+                <p class="muted small">
+                    {% if site.get("load_seconds") %}Started loading in {{ site.get("load_seconds") }}s. {% endif %}
+                    {% if site.get("copyright_year") %}Footer year: {{ site.get("copyright_year") }}. {% endif %}
+                    Checked {{ site.get("checked_on", "") }}.
+                </p>
+
+            {% elif site.get("status") == "down" %}
+                <p>The website did not load when it was checked on {{ site.get("checked_on", "") }}.</p>
+                <p class="muted small">{{ site.get("error", "") }}</p>
+            {% elif site.get("status") == "blocked" %}
+                <p>The website blocked our checker, so it couldn't be checked. Open it yourself and look.</p>
+            {% elif site.get("status") == "thin" %}
+                <p>This website builds its pages with JavaScript, so the checker only saw an empty page. Open it yourself and look.</p>
+            {% elif site.get("status") == "dead" %}
+                <p>The website's domain no longer exists.</p>
+            {% elif site.get("status") == "none" %}
+                <p>No website - a strong lead for a website offer.</p>
+            {% else %}
+                <p class="muted">Not checked.</p>
+            {% endif %}
+
+        </section>
+
+
+        <section class="card">
+
+            <h2>Status</h2>
+
+            <div class="status-buttons">
+                {% for status in ["New", "Contacted", "Replied", "Won", "Not interested"] %}
+                    <form method="POST" action="{{ url_for('set_status', lead_id=lead['id']) }}">
+                        <input type="hidden" name="status" value="{{ status }}">
+                        <button
+                            type="submit"
+                            class="btn small {{ 'current' if (lead['status'] or 'New') == status }}"
+                        >{{ status }}</button>
+                    </form>
+                {% endfor %}
+            </div>
+
+            <p class="muted small">
+                Found by {{ lead["source"] or "web search" }} on {{ (lead["created_at"] or "")[:10] }}.
+                {% if lead["contacted_at"] %}Contacted {{ lead["contacted_at"][:16] }}.{% endif %}
+            </p>
+
+            <div class="danger-zone">
+                <form method="POST" action="{{ url_for('do_not_contact', lead_id=lead['id']) }}"
+                      onsubmit="return confirm('Never contact this business again? Future searches will skip them.');">
+                    <button type="submit" class="btn small danger">They said no - do not contact</button>
+                </form>
+
+                <form method="POST" action="{{ url_for('remove_lead', lead_id=lead['id']) }}"
+                      onsubmit="return confirm('Delete this lead?');">
+                    <button type="submit" class="btn small ghost">Delete</button>
+                </form>
+            </div>
+
+        </section>
+
+    </aside>
+
+</div>
+
+
+<script>
+(function () {
+    var to = document.getElementById("to");
+    var subject = document.getElementById("subject");
+    var body = document.getElementById("body");
+
+    function enc(value) {
+        return encodeURIComponent(value || "");
+    }
+
+    function address() {
+        return (to.value || "").trim();
+    }
+
+    document.getElementById("send-gmail").addEventListener("click", function () {
+        this.href = "https://mail.google.com/mail/?view=cm&fs=1&to=" + enc(address())
+            + "&su=" + enc(subject.value) + "&body=" + enc(body.value);
+    });
+
+    document.getElementById("send-mailto").addEventListener("click", function () {
+        this.href = "mailto:" + address() + "?subject=" + enc(subject.value)
+            + "&body=" + enc(body.value);
+    });
+
+    var wa = document.getElementById("send-wa");
+
+    if (wa) {
+        wa.addEventListener("click", function () {
+            this.href = "https://wa.me/" + this.dataset.number + "?text=" + enc(body.value);
+        });
+    }
+
+    document.getElementById("copy").addEventListener("click", function () {
+        var button = this;
+        var text = "Subject: " + subject.value + "\n\n" + body.value;
+
+        navigator.clipboard.writeText(text).then(function () {
+            button.textContent = "Copied";
+            setTimeout(function () { button.textContent = "Copy"; }, 1500);
+        });
+    });
+})();
+</script>
+
+{% endblock %}

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - HustleHubM{% endblock %}
+
+{% block content %}
+
+<a class="back" href="{{ url_for('index') }}">&larr; All leads</a>
+
+<div class="lead-grid">
+
+    <section class="card">
+
+        <h2>Your details</h2>
+        <p class="muted">
+            These go at the bottom of every email. South African law
+            (POPIA) says marketing emails must show who sent them and how
+            to stop receiving them - the app adds the "reply no thanks"
+            line for you.
+        </p>
+
+        <form method="POST" class="grid-form one-col">
+
+            <label>
+                Your name
+                <input name="sender_name" value="{{ settings.sender_name }}" placeholder="Madjer">
+            </label>
+
+            <label>
+                Business name
+                <input name="sender_company" value="{{ settings.sender_company }}">
+            </label>
+
+            <label>
+                Contact line (phone, WhatsApp or website)
+                <input name="sender_contact" value="{{ settings.sender_contact }}" placeholder="WhatsApp 07x xxx xxxx">
+            </label>
+
+            <label>
+                Emails per day before the app warns you
+                <input name="daily_send_limit" type="number" min="1" max="200" value="{{ settings.daily_send_limit }}">
+            </label>
+
+            <label>
+                Country code for WhatsApp links
+                <input name="default_country_code" value="{{ settings.default_country_code }}" placeholder="27">
+            </label>
+
+            <div class="form-actions">
+                <button type="submit" class="btn primary">Save settings</button>
+            </div>
+
+        </form>
+
+    </section>
+
+
+    <aside>
+
+        <section class="card">
+
+            <h2>Local AI</h2>
+
+            <p>
+                <span class="ai-pill {{ 'ok' if ai_ready else 'off' }}"><span class="dot"></span>{{ ai_message }}</span>
+            </p>
+
+            <p class="muted small">
+                The AI runs on this computer with
+                <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>
+                - free, and nothing leaves your PC. To use a different model,
+                set <code>OLLAMA_MODEL</code> in the <code>.env</code> file
+                (now: <code>{{ ai_model }}</code>).
+            </p>
+
+        </section>
+
+        <section class="card">
+
+            <h2>Sending safely</h2>
+
+            <ul class="tips">
+                <li>Start with 10-15 emails a day from a new Gmail and grow slowly.</li>
+                <li>Never send to an email marked as unable to receive mail - bounces get accounts blocked.</li>
+                <li>Send one email per business, and stop the moment they say no.</li>
+                <li>Press <em>They said no</em> on a lead and it is never contacted again.</li>
+            </ul>
+
+        </section>
+
+    </aside>
+
+</div>
+
+{% endblock %}

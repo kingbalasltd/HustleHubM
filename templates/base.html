@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>{% block title %}HustleHubM Lead Machine{% endblock %}</title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='style.css') }}"
+    >
+</head>
+
+<body>
+
+<header class="topbar">
+    <div class="topbar-inner">
+
+        <a class="brand" href="{{ url_for('index') }}">
+            <span class="brand-mark">H</span>
+            <span>
+                <strong>HustleHubM</strong>
+                <small>AI Lead Machine</small>
+            </span>
+        </a>
+
+        <nav class="topnav">
+            <a href="{{ url_for('index') }}">Leads</a>
+            <a href="{{ url_for('settings_page') }}">Settings</a>
+
+            <span
+                class="ai-pill {{ 'ok' if ai_ready else 'off' }}"
+                title="{{ ai_message }}"
+            >
+                <span class="dot"></span>
+                {{ 'AI ready' if ai_ready else 'AI off' }}
+            </span>
+        </nav>
+
+    </div>
+</header>
+
+<main class="container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+
+    {% if not ai_ready %}
+        <div class="flash warn">
+            {{ ai_message }}
+            The app still works: emails use the built-in template and
+            search results are marked "please review".
+        </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+
+</main>
+
+</body>
+
+</html>

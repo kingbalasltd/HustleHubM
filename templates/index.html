@@ -1,132 +1,293 @@
-<!DOCTYPE html>
-<html>
+{% extends "base.html" %}
 
-<head>
+{% block content %}
 
-    <title>HustleHubM Lead Machine</title>
+<section class="card" id="run">
 
-    <link
-        rel="stylesheet"
-        href="{{ url_for('static', filename='style.css') }}"
-    >
-
-</head>
-
-<body>
-
-<div class="container">
-
-    <h1>HustleHubM</h1>
-
-    <p class="subtitle">
-        AI Lead Machine
+    <h2>Find new leads</h2>
+    <p class="muted">
+        Searches the web, checks each business's website, scores what
+        you could help with, and drafts a first email.
     </p>
 
-    <div class="card">
+    <form action="{{ url_for('run') }}" method="POST" class="search-form">
 
-        <h2>Add Lead</h2>
-
-        <form action="/add-lead" method="POST">
-
+        <label>
+            Type of business
             <input
-                name="business_name"
-                placeholder="Business name"
+                name="niche"
+                placeholder="dentists, salons, plumbers..."
+                value="{{ form.get('niche', '') }}"
                 required
             >
+        </label>
 
-            <input
-                name="website"
-                placeholder="Website"
-            >
-
-            <input
-                name="email"
-                placeholder="Business email"
-                type="email"
-            >
-
-            <input
-                name="industry"
-                placeholder="Industry"
-            >
-
+        <label>
+            Where
             <input
                 name="location"
-                placeholder="Location"
+                placeholder="Johannesburg"
+                value="{{ form.get('location', '') }}"
+                required
             >
+        </label>
 
-            <label>
-                <input type="checkbox" name="website_outdated">
-                Website needs improvement
-            </label>
+        <label>
+            How many leads
+            <select name="max_leads">
+                {% set chosen = form.get('max_leads', '5') | int %}
+                {% for n in [3, 5, 10, 15, 20] %}
+                    <option value="{{ n }}" {{ 'selected' if n == chosen }}>{{ n }}</option>
+                {% endfor %}
+            </select>
+        </label>
 
-            <label>
-                <input type="checkbox" name="has_booking">
-                Has online booking
-            </label>
+        <label>
+            Minimum score
+            <input name="minimum_score" type="number" min="0" max="100" value="{{ form.get('minimum_score', 20) }}">
+        </label>
 
-            <label>
-                <input type="checkbox" name="weak_cta">
-                Weak call-to-action
-            </label>
+        <button type="submit" class="btn primary" {{ 'disabled' if run.running }}>
+            {{ 'Searching...' if run.running else 'Find leads' }}
+        </button>
 
-            <label>
-                <input type="checkbox" name="weak_social">
-                Weak social presence
-            </label>
+    </form>
 
-            <button type="submit">
-                Add & Score Lead
-            </button>
-
-        </form>
-
+    <div class="run-panel {{ '' if run.lines else 'hidden' }}" id="run-panel">
+        <div class="run-head">
+            <span id="run-state">
+                {% if run.running %}
+                    <span class="spinner"></span> Working since {{ run.started }} - this can take a few minutes
+                {% else %}
+                    Last run (started {{ run.started }})
+                {% endif %}
+            </span>
+        </div>
+        <pre id="run-log">{{ run.lines | join('\n') }}</pre>
     </div>
 
+</section>
 
-    <div class="card">
 
-        <h2>Qualified Leads</h2>
+<section class="stats">
 
-        <table>
+    {% for status in ['New', 'Contacted', 'Replied', 'Won'] %}
+        <a class="stat" href="{{ url_for('index', show=status) }}">
+            <span class="stat-number">{{ counts[status] }}</span>
+            <span class="stat-label">{{ status }}</span>
+        </a>
+    {% endfor %}
 
-            <tr>
-                <th>Business</th>
-                <th>Industry</th>
-                <th>Location</th>
-                <th>Score</th>
-                <th>Opportunity</th>
-                <th>Email</th>
-            </tr>
+    <div class="stat {{ 'stat-warn' if sent_today >= daily_limit }}">
+        <span class="stat-number">{{ sent_today }}<small>/{{ daily_limit }}</small></span>
+        <span class="stat-label">Sent today</span>
+    </div>
 
+</section>
+
+{% if sent_today >= daily_limit %}
+    <div class="flash warn">
+        You've reached today's sending limit ({{ daily_limit }}).
+        Sending too many cold emails from one Gmail in a day can get the
+        account blocked - continue tomorrow.
+    </div>
+{% endif %}
+
+
+<section class="card">
+
+    <div class="leads-head">
+        <h2>Leads</h2>
+        <a class="btn small" href="{{ url_for('export_csv') }}">Export CSV</a>
+    </div>
+
+    <nav class="tabs">
+        {% for value, label in filters %}
+            <a
+                href="{{ url_for('index', show=value) }}"
+                class="{{ 'active' if show == value }}"
+            >
+                {{ label }}
+                {% if value in counts %}<span>{{ counts[value] }}</span>{% endif %}
+            </a>
+        {% endfor %}
+    </nav>
+
+    {% if leads %}
+
+        <div class="table-wrap">
+        <table class="leads">
+
+            <thead>
+                <tr>
+                    <th>Business</th>
+                    <th>Score</th>
+                    <th>What you can help with</th>
+                    <th>Contact</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+
+            <tbody>
             {% for lead in leads %}
 
-            <tr>
+                <tr onclick="location.href='{{ url_for('lead_page', lead_id=lead['id']) }}'">
 
-                <td>{{ lead["business_name"] }}</td>
+                    <td>
+                        <a class="lead-name" href="{{ url_for('lead_page', lead_id=lead['id']) }}">
+                            {{ lead["business_name"] }}
+                        </a>
+                        <div class="muted small">
+                            {{ lead["website"] | domain or 'No website' }}
+                            {% if lead["location"] %} &middot; {{ lead["location"] }}{% endif %}
+                        </div>
+                    </td>
 
-                <td>{{ lead["industry"] }}</td>
+                    <td>
+                        <span class="score score-{{ (lead['qualification'] or 'LOW') | lower }}">
+                            {{ lead["lead_score"] }}
+                        </span>
+                    </td>
 
-                <td>{{ lead["location"] }}</td>
+                    <td class="opps">
+                        {% set opps = (lead["opportunity"] or "").split("; ") %}
+                        {% for opp in opps[:2] if opp %}
+                            <div>{{ opp }}</div>
+                        {% else %}
+                            <span class="muted">{{ lead["ai_reason"] or 'Nothing obvious found' }}</span>
+                        {% endfor %}
+                        {% if opps | length > 2 %}
+                            <div class="muted small">+{{ opps | length - 2 }} more</div>
+                        {% endif %}
+                    </td>
 
-                <td>
-                    <strong>{{ lead["lead_score"] }}/100</strong>
-                </td>
+                    <td class="contact-icons">
+                        {% if lead["email"] %}
+                            <span
+                                class="chip {{ 'bad' if lead['email_status'] == 'no_mx' }}"
+                                title="{{ lead['email'] }}"
+                            >Email</span>
+                        {% endif %}
+                        {% if lead["whatsapp"] %}
+                            <span class="chip" title="{{ lead['whatsapp'] }}">WhatsApp</span>
+                        {% elif lead["phone"] %}
+                            <span class="chip" title="{{ lead['phone'] }}">Phone</span>
+                        {% endif %}
+                        {% if not lead["email"] and not lead["phone"] and not lead["whatsapp"] %}
+                            <span class="muted small">None found</span>
+                        {% endif %}
+                    </td>
 
-                <td>{{ lead["opportunity"] }}</td>
+                    <td>
+                        <span class="status status-{{ (lead['status'] or 'New') | lower | replace(' ', '-') }}">
+                            {{ lead["status"] or "New" }}
+                        </span>
+                    </td>
 
-                <td>{{ lead["email"] }}</td>
-
-            </tr>
+                </tr>
 
             {% endfor %}
+            </tbody>
 
         </table>
+        </div>
 
-    </div>
+    {% else %}
 
-</div>
+        <div class="empty">
+            {% if show == 'active' %}
+                No leads yet. Type a kind of business and a city above and
+                press <strong>Find leads</strong>.
+            {% else %}
+                Nothing here.
+            {% endif %}
+        </div>
 
-</body>
+    {% endif %}
 
-</html>
+</section>
+
+
+<details class="card">
+
+    <summary><h2>Add a lead by hand</h2></summary>
+
+    <form action="{{ url_for('create_lead') }}" method="POST" class="grid-form">
+
+        <label>
+            Business name
+            <input name="business_name" required>
+        </label>
+
+        <label>
+            Website
+            <input name="website" placeholder="example.co.za (leave empty if none)">
+        </label>
+
+        <label>
+            Business email
+            <input name="email" type="email" placeholder="found on the website if empty">
+        </label>
+
+        <label>
+            Phone
+            <input name="phone">
+        </label>
+
+        <label>
+            Industry
+            <input name="industry">
+        </label>
+
+        <label>
+            Location
+            <input name="location">
+        </label>
+
+        <div class="form-actions">
+            <button type="submit" class="btn primary">Add &amp; check website</button>
+        </div>
+
+    </form>
+
+</details>
+
+
+<script>
+(function () {
+    var panel = document.getElementById("run-panel");
+    var log = document.getElementById("run-log");
+    var state = document.getElementById("run-state");
+    var total = {{ run.lines | length }};
+    var running = {{ 'true' if run.running else 'false' }};
+
+    log.scrollTop = log.scrollHeight;
+
+    if (!running) return;
+
+    function poll() {
+        fetch("{{ url_for('run_status') }}?since=" + total)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.lines.length) {
+                    panel.classList.remove("hidden");
+                    log.textContent += (log.textContent ? "\n" : "") + data.lines.join("\n");
+                    total = data.total;
+                    log.scrollTop = log.scrollHeight;
+                }
+
+                if (data.running) {
+                    setTimeout(poll, 1500);
+                } else {
+                    state.textContent = "Finished - loading your new leads...";
+                    setTimeout(function () { location.reload(); }, 1200);
+                }
+            })
+            .catch(function () { setTimeout(poll, 3000); });
+    }
+
+    poll();
+})();
+</script>
+
+{% endblock %}
