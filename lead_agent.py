@@ -1,228 +1,334 @@
 import json
+import re
+
+import requests
 
 from local_ai import ask_ai
 from website_analyzer import analyze_website
+from lead_scorer import score_website, qualification
+from email_generator import generate_email
+
+
+# The local AI does two jobs it is good at:
+#   1. "What kind of page is this search result?"
+#   2. One friendly, personal opening line for the email.
+# The lead score is NOT the AI's opinion - lead_scorer works it
+# out from what the website analyzer actually found - and the
+# problem we mention in the email is written by the code, word
+# for word, so a small model can't twist the facts.
+
+
+CATEGORIES = {
+    "single_business": "the website of ONE local business",
+    "directory_or_list": "a directory, a list of businesses, or a booking/comparison site for many businesses",
+    "article": "a news article, blog post or general information page",
+    "government_or_education": "government, a university, school or NGO",
+    "chain_or_hospital": "a big national chain, franchise head office or hospital group",
+    "other": "anything else",
+}
+
+
+def parse_ai_json(text):
+    """Pull a JSON object out of a model reply, even if it is
+    wrapped in ```json fences or has chatter around it."""
+
+    if not text:
+        return None
+
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start == -1 or end <= start:
+        return None
+
+    try:
+        data = json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+
+    return data if isinstance(data, dict) else None
+
+
+def to_bool(value):
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1")
+
+    return bool(value)
+
+
+def unchecked(business, reason):
+    return {
+        "is_target_business": True,
+        "business_name": business.get("business_name", ""),
+        "business_type": business.get("industry", ""),
+        "reason": reason,
+        "ai_used": False,
+    }
+
+
+def classify_business(business, site):
+
+    # Google Maps listings are already real businesses.
+    if business.get("verified"):
+        return unchecked(business, "Listed on Google Maps")
+
+    category_list = "\n".join(
+        f'- "{key}": {meaning}'
+        for key, meaning in CATEGORIES.items()
+    )
+
+    prompt = f"""
+You sort web search results for HustleHubM, a small agency that
+sells websites and online marketing to local businesses.
+
+What kind of page is this?
+
+{category_list}
+
+SEARCH RESULT
+Title: {business.get("search_title") or business.get("business_name", "")}
+Snippet: {business.get("search_evidence", "")}
+Website: {business.get("website", "")}
+
+THE WEBSITE ITSELF
+Page title: {site.get("title", "")}
+Description: {site.get("description", "")}
+Text (start): {site.get("text", "")[:1500]}
+
+Reply with JSON only, with exactly these keys in this order:
+{{
+    "reason": "one short sentence about what this page is",
+    "category": "one of: {", ".join(CATEGORIES)}",
+    "business_name": "the business's real name, without slogans",
+    "business_type": "for example: dental practice"
+}}
+"""
+
+    try:
+        reply = ask_ai(prompt, json_mode=True, max_tokens=200)
+
+    except requests.RequestException as error:
+        return unchecked(
+            business,
+            f"Not checked by AI ({error.__class__.__name__}) - please review"
+        )
+
+    data = parse_ai_json(reply)
+
+    if data is None:
+        return unchecked(business, "AI reply could not be read - please review")
+
+    category = str(data.get("category") or "").strip().lower()
+
+    # Older prompts / other models may still answer true/false.
+    if category not in CATEGORIES and "is_target_business" in data:
+        category = (
+            "single_business"
+            if to_bool(data["is_target_business"])
+            else "other"
+        )
+
+    name = str(data.get("business_name") or "").strip()
+
+    return {
+        "is_target_business": category == "single_business",
+        "category": category,
+        "business_name": name or business.get("business_name", ""),
+        "business_type": str(data.get("business_type") or "").strip(),
+        "reason": str(data.get("reason") or "").strip(),
+        "ai_used": True,
+    }
 
 
 def analyze_business(business):
+    """Check the website, ask the AI what kind of page it is,
+    and score it from the evidence."""
 
     website = business.get("website", "")
 
-    website_data = analyze_website(website)
+    site = analyze_website(website)
+
+    classification = classify_business(business, site)
+
+    score, opportunities = score_website(site)
+
+    if classification["is_target_business"]:
+        level = qualification(score)
+    else:
+        score = 0
+        level = "REJECT"
+
+    return {
+        "is_target_business": classification["is_target_business"],
+        "business_name": classification["business_name"],
+        "business_type": classification["business_type"],
+        "reason": classification["reason"],
+        "ai_used": classification["ai_used"],
+        "lead_score": score,
+        "qualification": level,
+        "opportunities": opportunities,
+        "opportunity": "; ".join(item["label"] for item in opportunities),
+        "website_data": site,
+    }
+
+
+BANNED_PHRASES = (
+    "losing",
+    "untapped",
+    "guarantee",
+    "http",
+    "www.",
+    "unsubscribe",
+    "improve",
+    "boost",
+    "online presence",
+    # Pretending to be a customer is dishonest.
+    "looking for",
+    "i need",
+    "as a customer",
+    "caught my attention",
+)
+
+
+def parse_outreach(outreach):
+
+    if not outreach:
+        return "", ""
+
+    outreach = outreach.strip()
+
+    subject_match = re.search(
+        r"(?im)^\s*\**subject:\**\s*(.+)$",
+        outreach
+    )
+
+    # (?m) makes ^ match at the start of any line, not only the
+    # start of the text (the old version never found BODY:).
+    body_match = re.search(
+        r"(?ims)^\s*\**body:\**\s*(.*)$",
+        outreach
+    )
+
+    subject = ""
+
+    if subject_match:
+        subject = subject_match.group(1).strip().strip("*").strip()
+
+    body = ""
+
+    if body_match:
+        body = body_match.group(1).strip()
+
+    if not body:
+        body = outreach
+
+        if subject_match:
+            body = body.replace(subject_match.group(0), "", 1).strip()
+
+    return subject, body
+
+
+def opening_is_acceptable(sentence):
+    words = len(sentence.split())
+
+    if not 8 <= words <= 40:
+        return False
+
+    lower = sentence.lower()
+
+    # \b so "hi needs" (a salon name) doesn't count as "i need".
+    if any(re.search(r"\b" + re.escape(phrase), lower) for phrase in BANNED_PHRASES):
+        return False
+
+    # Placeholders like [Name] mean the model didn't finish the job.
+    if any(char in sentence for char in "[]{}<>"):
+        return False
+
+    return True
+
+
+def write_opening(name, business_type, location, source_text):
+    """One personal sentence, grounded in the business's own words.
+    Returns "" when there is nothing to ground it in or the AI fails."""
+
+    if len(source_text.strip()) < 80:
+        return ""
 
     prompt = f"""
-You are the lead qualification AI for HustleHubM.
+I am writing a short, friendly first email to {name}, a
+{business_type or "local business"} in {location}.
 
-Your job is to determine whether a search result is a REAL
-potential business client for online presence, marketing,
-lead-generation, or website services.
+Text from their website:
+\"\"\"{source_text[:1200]}\"\"\"
 
-Use ONLY the evidence provided.
+Write ONE sentence (12 to 30 words), in the first person ("I"),
+that shows I really looked at their business: mention one
+specific service, speciality, area or detail that appears in the
+text above.
 
-BUSINESS
-Name: {business.get("business_name", "")}
+Rules: start with "I saw" or "I came across", no advice, no
+problems, no compliments about the website itself, no exclamation
+marks, nothing that is not in the text. I am NOT a customer - never
+say I need their service or am looking for one.
 
-Location:
-{business.get("location", "")}
-
-Website:
-{website}
-
-SEARCH EVIDENCE:
-{business.get("search_evidence", "")}
-
-WEBSITE EVIDENCE:
-{json.dumps(website_data, indent=2)}
-
-IMPORTANT:
-
-First determine whether this is an actual target business.
-
-A TARGET BUSINESS can include:
-- Dentist or dental practice
-- Restaurant
-- Salon
-- Barber
-- Gym
-- Clinic
-- Real estate agency
-- Lawyer
-- Accountant
-- Professional service business
-- Local service business
-- Other legitimate commercial business
-
-DO NOT qualify these as target businesses:
-- Business directories
-- Search directories
-- Listing websites
-- Universities
-- Government organizations
-- Government departments
-- News websites
-- General information websites
-- Review websites
-- Marketplaces
-- Social media profiles
-- Hospitals or organizations that are not suitable commercial prospects
-- Pages that simply list other businesses
-
-If the result is NOT a target business:
-
-Return:
-
-{{
-    "is_target_business": false,
-    "lead_score": 0,
-    "qualification": "REJECT",
-    "opportunity": "Not a suitable target business.",
-    "evidence": "",
-    "recommended_service": "",
-    "outreach_angle": ""
-}}
-
-If it IS a target business:
-
-Evaluate only observable digital/marketing opportunities.
-
-Possible opportunities include:
-- Missing website features
-- Weak or unclear calls-to-action
-- Poor conversion flow
-- Missing booking functionality
-- Missing contact options
-- Weak local SEO signals
-- Weak website structure
-- Missing lead capture
-- Weak social integration
-- Poor mobile conversion signals
-- Other clearly observable digital opportunities
-
-Do NOT judge:
-- Quality of medical treatment
-- Quality of products or services
-- Customer satisfaction unless explicitly supported by evidence
-- Revenue
-- Number of customers
-- Search rankings unless provided by evidence
-- Competitor performance
-- Whether demand is "untapped"
-- Whether the business is losing customers
-- Anything that cannot be verified
-
-Never invent facts.
-
-Never assume that a feature is missing simply because it was not
-detected. Say "not detected in the available evidence" when appropriate.
-
-Lead scoring:
-
-90-100 = Very strong, clearly supported opportunity
-75-89  = Strong opportunity
-60-74  = Moderate opportunity
-40-59  = Weak opportunity
-0-39   = Poor opportunity
-
-HIGH = 75-100
-MEDIUM = 50-74
-LOW = 0-49
-
-Return ONLY valid JSON.
-
-Use exactly this structure:
-
-{{
-    "is_target_business": true,
-    "lead_score": 0,
-    "qualification": "HIGH",
-    "opportunity": "",
-    "evidence": "",
-    "recommended_service": "",
-    "outreach_angle": ""
-}}
+Reply as JSON: {{"sentence": "..."}}
 """
-
-    response = ask_ai(prompt)
 
     try:
+        reply = ask_ai(prompt, json_mode=True, max_tokens=120)
+    except requests.RequestException:
+        return ""
 
-        result = json.loads(response)
+    data = parse_ai_json(reply) or {}
+    sentence = str(data.get("sentence") or "").strip().replace("!", ".")
 
-        # Safety validation
-        result["lead_score"] = max(
-            0,
-            min(
-                100,
-                int(result.get("lead_score", 0))
-            )
+    if not opening_is_acceptable(sentence):
+        return ""
+
+    if sentence[-1] not in ".?":
+        sentence += "."
+
+    return sentence
+
+
+def write_email(business, analysis, sender=None):
+    """Returns (subject, body, ai_wrote_the_opening)."""
+
+    site = analysis.get("website_data") or {}
+
+    lead = {
+        "business_name": analysis.get("business_name") or business.get("business_name", ""),
+        "location": business.get("location", ""),
+        "opportunities": analysis.get("opportunities", []),
+    }
+
+    source_text = " ".join(
+        part
+        for part in (
+            site.get("description", ""),
+            site.get("text", ""),
         )
+        if part
+    ) or business.get("search_evidence", "")
 
-        if not result.get("is_target_business", True):
+    opening = write_opening(
+        lead["business_name"],
+        analysis.get("business_type", ""),
+        lead["location"],
+        source_text,
+    )
 
-            result["lead_score"] = 0
-            result["qualification"] = "REJECT"
+    subject, body = generate_email(lead, sender, opening)
 
-        return result
-
-    except (json.JSONDecodeError, ValueError, TypeError):
-
-        return {
-            "is_target_business": False,
-            "lead_score": 0,
-            "qualification": "REVIEW",
-            "opportunity": "AI returned invalid analysis.",
-            "evidence": response,
-            "recommended_service": "",
-            "outreach_angle": ""
-        }
+    return subject, body, bool(opening)
 
 
-def generate_outreach(business, analysis):
+def generate_outreach(business, analysis, sender=None):
+    """Kept for test_ai.py: returns the email as one block of text."""
 
-    prompt = f"""
-You are writing professional B2B outreach for HustleHubM.
+    subject, body, _ = write_email(business, analysis, sender)
 
-BUSINESS
-Name: {business.get("business_name", "")}
-
-Location:
-{business.get("location", "")}
-
-Website:
-{business.get("website", "")}
-
-VERIFIED AI ANALYSIS:
-{json.dumps(analysis, indent=2)}
-
-Write a concise personalized business email.
-
-Rules:
-
-- 70-100 words.
-- Mention ONE specific opportunity supported by the evidence.
-- Do not invent information.
-- Do not claim the business is losing customers.
-- Do not claim the opportunity is "untapped".
-- Do not guarantee results.
-- Do not pretend to be a customer.
-- Do not criticize their products, services, or healthcare.
-- Do not mention private information.
-- Keep the tone professional and human.
-- Use a low-pressure call to action.
-- Do not include fake unsubscribe links.
-- Do not include URLs unless one was provided in the evidence.
-- Do not use exaggerated marketing language.
-
-If the evidence says a feature was "not detected",
-phrase it carefully, for example:
-"I noticed that I couldn't identify..."
-
-Return exactly:
-
-SUBJECT: <subject>
-
-BODY:
-<body>
-"""
-
-    return ask_ai(prompt)
+    return f"SUBJECT: {subject}\n\nBODY:\n{body}"
